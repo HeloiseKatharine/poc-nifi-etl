@@ -1,0 +1,20 @@
+services:
+  sftp-caixagis:
+    image: atmoz/sftp:latest
+    container_name: sftp-caixagis
+    ports:
+      - "2222:22"
+    volumes:
+      - ./data/upload:/home/caixagis/upload
+      - ./data/download:/home/caixagis/download
+      - ./config/users.conf:/etc/sftp/users.conf:ro
+    command: caixagis:caixagis123:1001:100:upload,download
+    restart: unless-stopped
+    networks:
+      - sftp-network
+      - nifi_network
+networks:
+  sftp-network:
+    driver: bridge
+  nifi_network:
+    external: true

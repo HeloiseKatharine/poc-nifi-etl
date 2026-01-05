@@ -1,0 +1,10 @@
+# Dados SFTP
+data/upload/*
+data/download/*
+
+# Manter estrutura de diretórios
+!data/upload/.gitkeep
+!data/download/.gitkeep
+
+# Arquivos de ambiente
+.env

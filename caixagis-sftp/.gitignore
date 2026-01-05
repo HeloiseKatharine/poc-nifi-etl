@@ -1,6 +1,6 @@
 # Dados SFTP
 data/upload/*
-data/download/*
+# data/download/*
 
 # Manter estrutura de diretórios
 !data/upload/.gitkeep

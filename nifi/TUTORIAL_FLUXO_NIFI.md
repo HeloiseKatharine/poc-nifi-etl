@@ -2,18 +2,47 @@
 
 ## Objetivo
 Criar um fluxo que:
-1. Conecta a um serviço externo via GET
-2. Recebe um JSON como resposta
-3. Processa e transforma o JSON
-4. Insere os dados em um banco PostgreSQL
+1. Conecta ao servidor SFTP (caixagis-sftp)
+2. Baixa arquivos CSV da pasta `/download`
+3. Divide o CSV em registros individuais
+4. Converte e renomeia os campos do CSV
+5. Insere os dados na tabela `dados_csv` do PostgreSQL
+
+## Estrutura da Tabela de Destino
+
+```sql
+CREATE TABLE public.dados_csv (
+    projeto text NULL,
+    tipo text NULL,
+    situacao text NULL,
+    titulo text NULL,
+    descricao text NULL,
+    ultimas_notas text NULL,
+    id int4 NULL
+);
+```
 
 ---
 
 ## Visão Geral do Fluxo
 
 ```
-InvokeHTTP → EvaluateJsonPath → ConvertRecord → PutDatabaseRecord
+GetSFTP → SplitText → ConvertRecord → RenameRecordField → PutDatabaseRecord
 ```
+
+### Mapeamento de Campos CSV → Banco de Dados
+
+O CSV de origem possui campos com maiúsculas e acentuação que precisam ser renomeados:
+
+| Campo no CSV         | Campo no Banco |
+|---------------------|----------------|
+| ID                  | id             |
+| Projeto             | projeto        |
+| Tipo                | tipo           |
+| Situação            | situacao       |
+| Título              | titulo         |
+| Descrição           | descricao      |
+| Últimas notas       | ultimas_notas  |
 
 ---
 
@@ -27,123 +56,71 @@ InvokeHTTP → EvaluateJsonPath → ConvertRecord → PutDatabaseRecord
 
 ---
 
-## Passo 2: Criar o Fluxo
+## Passo 2: Configurar Controller Services
 
-### 2.1 Adicionar o Processor InvokeHTTP
+Antes de criar o fluxo, precisamos configurar os serviços de leitura/escrita de registros e a conexão com o banco de dados.
 
-Este processor fará a chamada GET ao serviço externo.
+### 2.1 Acessar Controller Services
 
-1. **Adicionar o Processor:**
-   - Arraste o ícone de **Processor** (símbolo de engrenagem) para o canvas
-   - Na busca, digite `InvokeHTTP`
-   - Selecione **InvokeHTTP** e clique em **ADD**
+1. No menu superior direito, clique no ícone de **hambúrguer** (☰)
+2. Selecione **Controller Settings**
+3. Vá para a aba **CONTROLLER SERVICES**
 
-2. **Configurar o InvokeHTTP:**
-   - Clique duas vezes no processor para abrir as configurações
-   - Vá para a aba **PROPERTIES**
-   - Configure:
-     - **HTTP Method**: `GET`
-     - **Remote URL**: `https://api.exemplo.com/dados` (substitua pela sua URL)
-     - **Connection Timeout**: `30 sec`
-     - **Read Timeout**: `30 sec`
+### 2.2 Adicionar e Configurar CSVReader
 
-3. **Configurar Scheduling:**
-   - Vá para a aba **SCHEDULING**
-   - **Run Schedule**: `60 sec` (executará a cada 60 segundos)
-   - Ou use `0 sec` para execução contínua
+O CSVReader lerá os dados do arquivo CSV.
 
-4. **Configurar Relationships (Auto-terminate):**
-   - Vá para a aba **SETTINGS**
-   - Marque estas relationships para **auto-terminate** (terminação automática):
-     - `Retry`
-     - `No Retry`
-     - `Failure`
-   - Deixe **Response** desmarcado (usaremos essa saída)
-
-5. Clique em **APPLY**
-
----
-
-### 2.2 Adicionar o Processor EvaluateJsonPath
-
-Este processor extrairá campos específicos do JSON.
-
-1. **Adicionar o Processor:**
-   - Arraste outro **Processor** para o canvas
-   - Digite `EvaluateJsonPath`
+1. **Adicionar CSVReader:**
+   - Clique no botão **+** (adicionar)
+   - Busque por `CSVReader`
    - Clique em **ADD**
 
-2. **Configurar o EvaluateJsonPath:**
-   - Clique duas vezes no processor
+2. **Configurar o CSVReader:**
+   - Clique no ícone de **engrenagem** (⚙️)
    - Vá para **PROPERTIES**
    - Configure:
-     - **Destination**: `flowfile-attribute`
-     - **Return Type**: `json`
+     - **Schema Access Strategy**: `Use String Fields From Header`
+     - **CSV Format**: `Custom Format`
+     - **Value Separator**: `,` (vírgula)
+     - **Skip Header Line**: `false`
+     - **Treat First Line as Header**: `true`
+     - **Quote Character**: `"`
+     - **Escape Character**: `\`
+     - **Trim Fields**: `true`
+     - **Charset Encoding**: `UTF-8`
 
-3. **Adicionar propriedades customizadas** (clique no botão **+**):
+3. Clique em **APPLY**
+4. **Habilite** o service (ícone de raio ⚡)
 
-   Exemplo de extração de campos do JSON:
-   ```
-   Nome da Propriedade: json.id
-   Valor: $.id
+### 2.3 Adicionar e Configurar JsonRecordSetWriter
 
-   Nome da Propriedade: json.nome
-   Valor: $.nome
+Este writer será usado para escrever registros no formato JSON intermediário.
 
-   Nome da Propriedade: json.email
-   Valor: $.email
+1. **Adicionar JsonRecordSetWriter:**
+   - Clique em **+**
+   - Busque por `JsonRecordSetWriter`
+   - Clique em **ADD**
 
-   Nome da Propriedade: json.data
-   Valor: $.data
-   ```
+2. **Configurar:**
+   - **Schema Write Strategy**: `Do Not Write Schema`
+   - **Schema Access Strategy**: `Inherit Record Schema`
+   - **Pretty Print JSON**: `false`
+   - Deixe as demais configurações padrão
 
-   > **Nota**: Ajuste os JSONPath de acordo com a estrutura do seu JSON
+3. Clique em **APPLY**
+4. **Habilite** o service (⚡)
 
-   Exemplo de JSON:
-   ```json
-   {
-     "id": 123,
-     "nome": "João Silva",
-     "email": "joao@exemplo.com",
-     "data": "2025-12-29"
-   }
-   ```
+### 2.4 Adicionar e Configurar DBCPConnectionPool
 
-4. **Configurar Relationships:**
-   - Em **SETTINGS**, marque para **auto-terminate**:
-     - `failure`
-     - `unmatched`
-   - Deixe **matched** desmarcado
+Configuração da conexão com o PostgreSQL.
 
-5. Clique em **APPLY**
-
----
-
-### 2.3 Conectar InvokeHTTP ao EvaluateJsonPath
-
-1. Passe o mouse sobre o **InvokeHTTP**
-2. Arraste a seta que aparece até o **EvaluateJsonPath**
-3. Na janela de conexão, selecione **Response**
-4. Clique em **ADD**
-
----
-
-### 2.4 Configurar o Controller Service para PostgreSQL
-
-Antes de adicionar o processor de banco de dados, precisamos configurar a conexão.
-
-1. **Acessar Controller Services:**
-   - No menu superior direito, clique no ícone de **hambúrguer** (três linhas)
-   - Selecione **Controller Settings**
-   - Vá para a aba **CONTROLLER SERVICES**
-
-2. **Adicionar DBCPConnectionPool:**
-   - Clique no botão **+** (adicionar)
+1. **Adicionar DBCPConnectionPool:**
+   - Clique no botão **+**
    - Busque por `DBCPConnectionPool`
    - Clique em **ADD**
 
-3. **Configurar o DBCPConnectionPool:**
-   - Clique no ícone de **engrenagem** (configurações) do service
+2. **Configurar o DBCPConnectionPool:**
+   - Clique no ícone de **engrenagem** (⚙️)
    - Vá para **PROPERTIES**
    - Configure:
      - **Database Connection URL**: `jdbc:postgresql://postgres:5432/postgres`
@@ -152,7 +129,7 @@ Antes de adicionar o processor de banco de dados, precisamos configurar a conex�
      - **Password**: `postgres`
      - **Database Driver Location(s)**: `/opt/nifi/nifi-current/lib/postgresql-jdbc.jar`
 
-4. **Instalar o driver PostgreSQL no container:**
+3. **Instalar o driver PostgreSQL no container:**
 
    Abra um terminal e execute:
    ```bash
@@ -160,97 +137,260 @@ Antes de adicionar o processor de banco de dados, precisamos configurar a conex�
    docker exec -it nifi bash -c "cd /opt/nifi/nifi-current/lib && curl -O https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.1/postgresql-42.7.1.jar && mv postgresql-42.7.1.jar postgresql-jdbc.jar"
    ```
 
-5. **Habilitar o Controller Service:**
-   - Clique no ícone de **raio** (enable) no DBCPConnectionPool
-   - Clique em **ENABLE**
+4. Clique em **APPLY**
+5. **Habilite** o service (ícone de raio ⚡)
 
 ---
 
-### 2.5 Criar Schema para Conversão (JsonTreeReader)
+## Passo 3: Criar o Fluxo
 
-1. **Voltar para Controller Services**
-2. **Adicionar JsonTreeReader:**
-   - Clique em **+**
-   - Busque `JsonTreeReader`
-   - Clique em **ADD**
+### 3.1 Adicionar GetSFTP Processor
 
-3. **Configurar JsonTreeReader:**
-   - Clique em configurações
-   - Deixe as configurações padrão
-   - Clique em **APPLY**
-   - **Habilite** o service (ícone de raio)
+Este processor conectará ao servidor SFTP e baixará os arquivos CSV.
 
----
+1. **Adicionar o Processor:**
+   - Arraste o ícone de **Processor** (⚙️) para o canvas
+   - Na busca, digite `GetSFTP`
+   - Selecione **GetSFTP** e clique em **ADD**
 
-### 2.6 Criar Schema Writer (AvroRecordSetWriter)
+2. **Configurar o GetSFTP:**
+   - Clique duas vezes no processor para abrir as configurações
+   - Vá para a aba **PROPERTIES**
+   - Configure:
+     - **Hostname**: `sftp-caixagis`
+     - **Port**: `22`
+     - **Username**: `caixagis`
+     - **Password**: `caixagis123`
+     - **Remote Path**: `/download`
+     - **Search Recursively**: `false`
+     - **File Filter Regex**: `.*\.csv` (apenas arquivos CSV)
+     - **Path Filter Regex**: (deixe em branco)
+     - **Polling Interval**: `60 sec`
+     - **Connection Timeout**: `30 sec`
+     - **Data Timeout**: `30 sec`
+     - **Use Compression**: `false`
+     - **Delete Original**: `false` (mude para `true` se quiser remover após download)
+     - **Strict Host Key Checking**: `false`
 
-1. **Adicionar AvroRecordSetWriter:**
-   - Clique em **+**
-   - Busque `AvroRecordSetWriter`
-   - Clique em **ADD**
+3. **Configurar Scheduling:**
+   - Vá para a aba **SCHEDULING**
+   - **Run Schedule**: `60 sec` (verifica novos arquivos a cada 60 segundos)
 
-2. **Configurar:**
-   - Deixe configurações padrão
-   - Clique em **APPLY**
-   - **Habilite** o service
+4. **Configurar Relationships (Auto-terminate):**
+   - Vá para a aba **SETTINGS**
+   - Marque para **auto-terminate**:
+     - `not.found`
+     - `permission.denied`
+     - `failure`
+   - Deixe **success** desmarcado
 
----
-
-### 2.7 Adicionar ConvertRecord (Opcional)
-
-Se você precisar transformar o JSON para outro formato antes de inserir.
-
-1. **Adicionar Processor:**
-   - Arraste um **Processor**
-   - Digite `ConvertRecord`
-   - Clique em **ADD**
-
-2. **Configurar:**
-   - **Record Reader**: Selecione o `JsonTreeReader` criado
-   - **Record Writer**: Selecione o `AvroRecordSetWriter` criado
-
-3. **Auto-terminate:**
-   - `failure`
-   - Deixe `success` desmarcado
+5. Clique em **APPLY**
 
 ---
 
-### 2.8 Adicionar PutDatabaseRecord
+### 3.2 Adicionar SplitText Processor
 
-Este processor inserirá os dados no PostgreSQL.
+O SplitText dividirá o CSV em blocos de linhas para processamento mais eficiente.
 
-1. **Adicionar Processor:**
-   - Arraste um **Processor**
-   - Digite `PutDatabaseRecord`
+1. **Adicionar o Processor:**
+   - Arraste um **Processor** para o canvas
+   - Digite `SplitText`
    - Clique em **ADD**
 
-2. **Configurar o PutDatabaseRecord:**
-   - **Record Reader**: Selecione o `JsonTreeReader`
-   - **Statement Type**: `INSERT`
-   - **Database Connection Pooling Service**: Selecione o `DBCPConnectionPool` criado
-   - **Table Name**: `dados_api` (ou o nome da sua tabela)
-   - **Translate Field Names**: `true`
-   - **Unmatched Field Behavior**: `Ignore Unmatched Fields`
-   - **Unmatched Column Behavior**: `Ignore Unmatched Columns`
+2. **Configurar o SplitText:**
+   - Clique duas vezes no processor
+   - Vá para **PROPERTIES**
+   - Configure:
+     - **Line Split Count**: `100` (processa 100 linhas por vez, ajuste conforme necessário)
+     - **Maximum Fragment Size**: `0` (sem limite de tamanho)
+     - **Header Line Count**: `1` (mantém o cabeçalho em cada split)
+     - **Header Line Marker Characters**: (deixe em branco)
+     - **Remove Trailing Newlines**: `true`
 
-3. **Auto-terminate:**
-   - Marque: `failure`, `retry`
-   - Deixe `success` desmarcado (para ver o resultado)
+3. **Configurar Relationships:**
+   - Vá para **SETTINGS**
+   - Marque para **auto-terminate**:
+     - `failure`
+     - `original`
+   - Deixe **splits** desmarcado
 
 4. Clique em **APPLY**
 
 ---
 
-### 2.9 Conectar os Processors
+### 3.3 Conectar GetSFTP ao SplitText
 
-1. Conecte **EvaluateJsonPath** → **PutDatabaseRecord**
-   - Relationship: `matched`
+1. Passe o mouse sobre o **GetSFTP**
+2. Arraste a seta que aparece até o **SplitText**
+3. Na janela de conexão, selecione **success**
+4. Clique em **ADD**
 
 ---
 
-### 2.10 Criar a Tabela no PostgreSQL
+### 3.4 Adicionar ConvertRecord Processor
 
-Você precisará criar a tabela no banco de dados antes de executar o fluxo.
+O ConvertRecord validará e converterá o CSV para um formato de registro estruturado.
+
+1. **Adicionar o Processor:**
+   - Arraste um **Processor** para o canvas
+   - Digite `ConvertRecord`
+   - Clique em **ADD**
+
+2. **Configurar o ConvertRecord:**
+   - **Record Reader**: Selecione o `CSVReader` criado anteriormente
+   - **Record Writer**: Selecione o `JsonRecordSetWriter` criado anteriormente
+   - **Include Zero Record FlowFiles**: `false`
+
+3. **Configurar Relationships:**
+   - Marque para **auto-terminate**:
+     - `failure`
+   - Deixe **success** desmarcado
+
+4. Clique em **APPLY**
+
+---
+
+### 3.5 Conectar SplitText ao ConvertRecord
+
+1. Arraste a seta do **SplitText** até o **ConvertRecord**
+2. Selecione **splits**
+3. Clique em **ADD**
+
+---
+
+### 3.6 Adicionar RenameRecordField Processor
+
+O RenameRecordField renomeará os campos do CSV para corresponder aos nomes das colunas no banco de dados.
+
+1. **Adicionar o Processor:**
+   - Arraste um **Processor** para o canvas
+   - Digite `UpdateRecord`
+   - Clique em **ADD**
+
+   > **Nota**: Usaremos o **UpdateRecord** ao invés de RenameRecordField, pois é mais flexível e permite múltiplas renomeações.
+
+2. **Configurar o UpdateRecord:**
+   - **Record Reader**: Selecione o `JsonRecordSetWriter` criado
+   - **Record Writer**: Selecione o `JsonRecordSetWriter` criado
+   - **Replacement Value Strategy**: `Record Path Value`
+
+3. **Adicionar Propriedades Customizadas** (clique no **+**):
+
+   Adicione cada mapeamento de campo (nome → valor):
+
+   ```
+   Nome da Propriedade: /id
+   Valor: /ID
+
+   Nome da Propriedade: /projeto
+   Valor: /Projeto
+
+   Nome da Propriedade: /tipo
+   Valor: /Tipo
+
+   Nome da Propriedade: /situacao
+   Valor: /Situação
+
+   Nome da Propriedade: /titulo
+   Valor: /Título
+
+   Nome da Propriedade: /descricao
+   Valor: /Descrição
+
+   Nome da Propriedade: /ultimas_notas
+   Valor: /Últimas notas
+   ```
+
+4. **Configurar Relationships:**
+   - Marque para **auto-terminate**:
+     - `failure`
+   - Deixe **success** desmarcado
+
+5. Clique em **APPLY**
+
+---
+
+### 3.7 Conectar ConvertRecord ao UpdateRecord
+
+1. Arraste a seta do **ConvertRecord** até o **UpdateRecord**
+2. Selecione **success**
+3. Clique em **ADD**
+
+---
+
+### 3.8 Adicionar PutDatabaseRecord Processor
+
+Este processor inserirá os dados no PostgreSQL.
+
+1. **Adicionar o Processor:**
+   - Arraste um **Processor** para o canvas
+   - Digite `PutDatabaseRecord`
+   - Clique em **ADD**
+
+2. **Configurar o PutDatabaseRecord:**
+   - **Record Reader**: Selecione o `JsonRecordSetWriter`
+   - **Statement Type**: `INSERT`
+   - **Database Connection Pooling Service**: Selecione o `DBCPConnectionPool` criado
+   - **Schema Name**: (deixe em branco)
+   - **Table Name**: `dados_csv`
+   - **Translate Field Names**: `true`
+   - **Unmatched Field Behavior**: `Ignore Unmatched Fields`
+   - **Unmatched Column Behavior**: `Ignore Unmatched Columns`
+   - **Update Keys**: (deixe em branco)
+   - **Field Containing SQL**: (deixe em branco)
+   - **Allow Multiple Statements**: `false`
+   - **Quote Column Identifiers**: `false`
+   - **Quote Table Identifiers**: `false`
+   - **Maximum Batch Size**: `100`
+
+3. **Configurar Relationships:**
+   - Marque para **auto-terminate**:
+     - `failure`
+     - `retry`
+   - Deixe **success** desmarcado (para monitorar)
+
+4. Clique em **APPLY**
+
+---
+
+### 3.9 Conectar UpdateRecord ao PutDatabaseRecord
+
+1. Arraste a seta do **UpdateRecord** até o **PutDatabaseRecord**
+2. Selecione **success**
+3. Clique em **ADD**
+
+---
+
+### 3.10 Adicionar LogAttribute (Opcional - para monitoramento)
+
+Para debug e monitoramento, adicione um processor para logar o sucesso.
+
+1. **Adicionar o Processor:**
+   - Arraste um **Processor**
+   - Digite `LogAttribute`
+   - Clique em **ADD**
+
+2. **Configurar:**
+   - **Log Level**: `info`
+   - **Log Payload**: `false`
+   - **Attributes to Log**: (deixe em branco para logar todos)
+   - **Log Prefix**: `[SUCCESS] `
+
+3. **Configurar Relationships:**
+   - Marque **success** para auto-terminate
+
+4. Clique em **APPLY**
+
+5. **Conectar:**
+   - Arraste a seta do **PutDatabaseRecord** até o **LogAttribute**
+   - Selecione **success**
+   - Clique em **ADD**
+
+---
+
+## Passo 4: Criar a Tabela no PostgreSQL
+
+Antes de executar o fluxo, crie a tabela de destino no banco de dados.
 
 Execute no terminal:
 
@@ -258,46 +398,154 @@ Execute no terminal:
 # Acessar o container do PostgreSQL
 docker exec -it postgres psql -U postgres -d postgres
 
-# Criar a tabela (ajuste os campos conforme seu JSON)
-CREATE TABLE IF NOT EXISTS dados_api (
-    id INTEGER PRIMARY KEY,
-    nome VARCHAR(255),
-    email VARCHAR(255),
-    data VARCHAR(50)
+# Criar a tabela usando o script init.sql
+CREATE TABLE IF NOT EXISTS public.dados_csv (
+    projeto text NULL,
+    tipo text NULL,
+    situacao text NULL,
+    titulo text NULL,
+    descricao text NULL,
+    ultimas_notas text NULL,
+    id int4 NULL
 );
 
-# Verificar
+# Verificar se a tabela foi criada
 \dt
+
+# Visualizar a estrutura da tabela
+\d dados_csv
 
 # Sair
 \q
 ```
 
+> **Dica**: O arquivo `init.sql` na raiz do projeto contém essa mesma estrutura de tabela.
+
 ---
 
-## Passo 3: Executar o Fluxo
+## Passo 5: Verificar Conectividade SFTP ↔ NiFi
+
+Antes de executar o fluxo, certifique-se de que o NiFi consegue acessar o servidor SFTP.
+
+### 5.1 Verificar se os containers estão rodando
+
+```bash
+# Verificar containers do NiFi e PostgreSQL
+docker compose ps
+
+# Verificar container do SFTP (no diretório caixagis-sftp)
+cd ../caixagis-sftp
+docker compose ps
+cd ../nifi
+```
+
+### 5.2 Testar conectividade
+
+```bash
+# Entrar no container do NiFi
+docker exec -it nifi bash
+
+# Tentar ping no servidor SFTP
+ping -c 3 sftp-caixagis
+
+# Sair
+exit
+```
+
+Se o ping não funcionar, você precisará conectar ambos os containers na mesma rede Docker. Consulte o README do caixagis-sftp para instruções.
+
+---
+
+## Passo 6: Executar o Fluxo
+
+### 6.1 Adicionar arquivo de teste (se necessário)
+
+Certifique-se de que há pelo menos um arquivo CSV na pasta download do SFTP:
+
+```bash
+cd ../caixagis-sftp
+
+# Verificar se há arquivos
+ls -la data/download/
+
+# Se não houver arquivo, crie um de teste
+cat > data/download/teste.csv << 'EOF'
+ID,Projeto,Tipo,Situação,Título,Descrição,Últimas notas
+1,Sistema X,Demanda,Aberto,Implementar login,Sistema de autenticação,Em desenvolvimento
+2,Portal Y,Bug,Fechado,Corrigir menu,Menu lateral quebrado,Corrigido
+EOF
+
+cd ../nifi
+```
+
+### 6.2 Iniciar o Fluxo
 
 1. **Selecionar todos os processors:**
-   - Pressione `Ctrl+A` ou arraste para selecionar todos
+   - No canvas do NiFi, pressione `Ctrl+A` ou arraste para selecionar todos
 
 2. **Iniciar o fluxo:**
-   - Clique no botão **Play** (▶) na barra de operações
+   - Clique no botão **Play** (▶️) na barra de operações (ou clique com o botão direito e selecione "Start")
 
 3. **Monitorar:**
-   - Você verá números aparecendo nas conexões (flowfiles)
-   - Clique com botão direito nas conexões para ver **List queue**
-   - Verifique se os dados estão sendo processados
+   - Você verá números aparecendo nas conexões (flowfiles sendo processados)
+   - Os números indicam quantos arquivos/registros estão em cada etapa
+   - Verde indica processamento bem-sucedido
+   - Vermelho indica erros
+
+### 6.3 Verificar o processamento
+
+1. **Ver filas:**
+   - Clique com botão direito nas conexões → **List queue**
+   - Você pode visualizar o conteúdo dos flowfiles
+
+2. **Ver status dos processors:**
+   - Cada processor mostra estatísticas:
+     - **In**: FlowFiles recebidos
+     - **Out**: FlowFiles enviados
+     - **Tasks/Time**: Tarefas executadas e tempo total
+
+3. **Ver logs em tempo real:**
+   ```bash
+   docker compose logs -f nifi
+   ```
 
 ---
 
-## Passo 4: Verificar os Dados no PostgreSQL
+## Passo 7: Verificar os Dados no PostgreSQL
+
+Após alguns minutos (dependendo do tamanho do arquivo), verifique se os dados foram inseridos:
 
 ```bash
 # Acessar o container do PostgreSQL
 docker exec -it postgres psql -U postgres -d postgres
 
-# Consultar os dados
-SELECT * FROM dados_api;
+# Consultar os dados inseridos
+SELECT * FROM dados_csv;
+
+# Consultar com formatação limitada
+SELECT
+    id,
+    projeto,
+    tipo,
+    situacao,
+    titulo
+FROM dados_csv
+LIMIT 10;
+
+# Contar registros
+SELECT COUNT(*) FROM dados_csv;
+
+# Ver distribuição por tipo
+SELECT tipo, COUNT(*) as quantidade
+FROM dados_csv
+GROUP BY tipo
+ORDER BY quantidade DESC;
+
+# Ver distribuição por situação
+SELECT situacao, COUNT(*) as quantidade
+FROM dados_csv
+GROUP BY situacao
+ORDER BY quantidade DESC;
 
 # Sair
 \q
@@ -305,132 +553,395 @@ SELECT * FROM dados_api;
 
 ---
 
-## Alternativas e Melhorias
+## Diagrama do Fluxo Completo
 
-### Opção 1: Usar PutSQL ao invés de PutDatabaseRecord
-
-Se preferir controle total sobre o SQL:
-
-1. Adicione o processor **PutSQL**
-2. Antes dele, adicione **ReplaceText** para criar o INSERT statement:
-   ```sql
-   INSERT INTO dados_api (id, nome, email, data)
-   VALUES (${json.id}, '${json.nome}', '${json.email}', '${json.data}')
-   ```
-
-### Opção 2: Transformar JSON com JoltTransformJSON
-
-Se precisar transformar a estrutura do JSON:
-
-1. Adicione **JoltTransformJSON** após o InvokeHTTP
-2. Configure a especificação Jolt para transformar o JSON
-
-### Opção 3: Validar JSON com ValidateRecord
-
-1. Adicione **ValidateRecord** para validar o schema do JSON
-2. Configure um schema Avro para validação
+```
+┌──────────────────┐
+│                  │
+│    GetSFTP       │  ← Conecta ao servidor SFTP caixagis-sftp
+│  (sftp-caixagis) │    Baixa arquivos CSV da pasta /download
+│                  │
+└────────┬─────────┘
+         │ success
+         │ (arquivo CSV completo)
+         ↓
+┌──────────────────┐
+│                  │
+│   SplitText      │  ← Divide o CSV em blocos de 100 linhas
+│  (100 linhas)    │    Mantém o cabeçalho em cada bloco
+│                  │
+└────────┬─────────┘
+         │ splits
+         │ (múltiplos flowfiles com blocos do CSV)
+         ↓
+┌──────────────────┐
+│                  │
+│  ConvertRecord   │  ← Converte CSV para formato Record
+│  (CSV → Record)  │    Valida a estrutura dos dados
+│                  │
+└────────┬─────────┘
+         │ success
+         │ (registros estruturados)
+         ↓
+┌──────────────────┐
+│                  │
+│  UpdateRecord    │  ← Renomeia os campos do CSV
+│  (Renomear)      │    ID→id, Projeto→projeto, etc.
+│                  │
+└────────┬─────────┘
+         │ success
+         │ (campos renomeados)
+         ↓
+┌──────────────────┐
+│                  │
+│PutDatabaseRecord │  ← Insere os dados no PostgreSQL
+│   (dados_csv)    │    Tabela: dados_csv
+│                  │
+└────────┬─────────┘
+         │ success
+         │
+         ↓
+┌──────────────────┐
+│                  │
+│  LogAttribute    │  ← Log de sucesso (opcional)
+│  (Monitoramento) │
+│                  │
+└──────────────────┘
+```
 
 ---
 
-## Tratamento de Erros
+## Tratamento de Erros e Melhorias
 
-### Adicionar LogAttribute
+### Adicionar Tratamento de Falhas
 
-Para debug, adicione um processor **LogAttribute**:
+Para cada processor, você pode conectar a saída `failure` a um **LogAttribute** para debug:
 
-1. Conecte qualquer saída de `failure` para ele
-2. Configure para logar todos os atributos
-3. Veja os logs: `docker-compose logs -f nifi`
+1. Adicione um processor **LogAttribute** no canvas
+2. Configure:
+   - **Log Level**: `error`
+   - **Log Payload**: `true` (para ver o conteúdo que falhou)
+   - **Attributes to Log**: (deixe em branco)
+   - **Log Prefix**: `[ERROR] `
 
-### Adicionar UpdateAttribute
+3. Conecte as saídas de **failure** de cada processor para este LogAttribute
 
-Para adicionar timestamps ou outros metadados:
+4. Auto-terminate a saída **success** do LogAttribute
 
-1. Adicione **UpdateAttribute** no fluxo
-2. Adicione propriedades:
-   - `processing.timestamp`: `${now():format('yyyy-MM-dd HH:mm:ss')}`
-   - `source.api`: `nome-da-api`
+### Adicionar Retry em Caso de Falha de Banco
+
+1. Adicione um processor **RetryFlowFile** após o PutDatabaseRecord
+2. Conecte a saída **retry** do PutDatabaseRecord para ele
+3. Configure:
+   - **Retry Attribute**: `retry.count`
+   - **Maximum Retries**: `3`
+   - **Penalize Retries**: `true`
+   - **Reuse Mode**: `Fail on Reuse`
+
+4. Conecte a saída **retry** do RetryFlowFile de volta para o PutDatabaseRecord
+5. Conecte a saída **retries_exceeded** para um LogAttribute
+
+### Adicionar UpdateAttribute para Metadados
+
+Para adicionar informações de processamento:
+
+1. Adicione **UpdateAttribute** após o GetSFTP
+2. Adicione propriedades customizadas:
+   - `data.processamento`: `${now():format('yyyy-MM-dd HH:mm:ss')}`
+   - `arquivo.origem`: `${filename}`
+   - `sftp.host`: `sftp-caixagis`
+
+### Configurar Backpressure
+
+Para evitar sobrecarga de memória em arquivos grandes:
+
+1. Clique com botão direito em cada conexão → **Configure**
+2. Configure:
+   - **Object Threshold**: `1000` (máximo de flowfiles na fila)
+   - **Size Threshold**: `100 MB` (tamanho máximo da fila)
 
 ---
 
 ## Dicas Importantes
 
-1. **Backpressure**: Configure backpressure nas conexões para evitar overflow
-   - Clique com botão direito na conexão → Configure
-   - Ajuste Object Threshold e Size Threshold
+1. **Performance**:
+   - Ajuste o **Line Split Count** do SplitText conforme o tamanho dos seus arquivos
+   - Para arquivos pequenos (< 1000 linhas), você pode remover o SplitText
+   - Para arquivos grandes (> 100.000 linhas), aumente para 1000 ou mais
 
-2. **Scheduling**: Ajuste o intervalo de execução do InvokeHTTP conforme necessário
+2. **Encoding**:
+   - Se o CSV tiver caracteres especiais, verifique o encoding no CSVReader
+   - Opções comuns: `UTF-8`, `ISO-8859-1`, `Windows-1252`
 
-3. **Bulletin Board**: Monitore alertas no canto superior direito
+3. **Separadores**:
+   - O CSV de exemplo usa vírgula (`,`), mas se o seu usar ponto e vírgula (`;`), altere o **Value Separator** no CSVReader
 
-4. **Data Provenance**: Clique com botão direito nos flowfiles → View Data Provenance
+4. **Monitoramento**:
+   - Use o **Bulletin Board** (canto superior direito) para ver alertas
+   - Configure **Bulletin Level** como `DEBUG` nos processors para mais detalhes
 
-5. **Templates**: Salve seu fluxo como template:
-   - Selecione todos os processors
-   - Menu hambúrguer → Create Template
+5. **Data Provenance**:
+   - Clique com botão direito em qualquer flowfile → **View Data Provenance**
+   - Isso mostra todo o histórico de processamento do dado
 
----
-
-## Fluxo Completo Resumido
-
-```
-┌──────────────┐     Response      ┌────────────────────┐
-│              │──────────────────→│                    │
-│ InvokeHTTP   │                   │ EvaluateJsonPath   │
-│              │                   │                    │
-└──────────────┘                   └────────────────────┘
-                                            │
-                                            │ matched
-                                            ↓
-                                   ┌────────────────────┐
-                                   │                    │
-                                   │ PutDatabaseRecord  │
-                                   │                    │
-                                   └────────────────────┘
-                                            │
-                                            │ success
-                                            ↓
-                                   ┌────────────────────┐
-                                   │                    │
-                                   │  LogAttribute      │
-                                   │  (opcional)        │
-                                   └────────────────────┘
-```
+6. **Salvar como Template**:
+   - Selecione todos os processors (`Ctrl+A`)
+   - Menu hambúrguer (☰) → **Create Template**
+   - Nome sugerido: "SFTP CSV to PostgreSQL"
 
 ---
 
 ## Troubleshooting
 
+### Erro: "Connection refused" ao conectar no SFTP
+
+**Causa**: NiFi não consegue acessar o container do SFTP.
+
+**Solução**:
+1. Verifique se o SFTP está rodando:
+   ```bash
+   cd ../caixagis-sftp
+   docker compose ps
+   ```
+
+2. Verifique se estão na mesma rede:
+   ```bash
+   docker network ls
+   docker network inspect nifi_network
+   ```
+
+3. Se necessário, conecte manualmente:
+   ```bash
+   docker network connect nifi_network sftp-caixagis
+   ```
+
+---
+
 ### Erro: "Cannot load driver class org.postgresql.Driver"
-- Verifique se o JAR do PostgreSQL foi baixado corretamente
-- Reinicie o NiFi: `docker-compose restart nifi`
+
+**Causa**: Driver PostgreSQL não foi instalado corretamente.
+
+**Solução**:
+1. Instale o driver (veja Passo 2.4)
+2. Reinicie o NiFi:
+   ```bash
+   docker compose restart nifi
+   ```
+3. Aguarde 2-3 minutos para o NiFi reiniciar
+4. Verifique se o arquivo existe:
+   ```bash
+   docker exec -it nifi ls -la /opt/nifi/nifi-current/lib/postgresql-jdbc.jar
+   ```
+
+---
 
 ### Erro: "Table doesn't exist"
-- Crie a tabela no PostgreSQL antes de executar o fluxo
 
-### Erro: "Connection refused"
-- Verifique se o container do PostgreSQL está rodando: `docker ps`
-- Certifique-se de que ambos os containers estão na mesma network
+**Causa**: Tabela não foi criada no PostgreSQL.
 
-### FlowFiles ficam presos
-- Verifique os logs dos processors
-- Clique no processor → View Configuration → Settings → Bulletin Level: DEBUG
+**Solução**:
+1. Crie a tabela antes de executar o fluxo (veja Passo 4)
+2. Verifique se a tabela existe:
+   ```bash
+   docker exec -it postgres psql -U postgres -d postgres -c "\dt"
+   ```
 
-### Timeout na chamada HTTP
-- Aumente os timeouts no InvokeHTTP
-- Verifique se a URL está acessível
+---
+
+### Erro: "Authentication failed" no SFTP
+
+**Causa**: Credenciais incorretas ou servidor SFTP não está pronto.
+
+**Solução**:
+1. Verifique as credenciais no GetSFTP:
+   - Username: `caixagis`
+   - Password: `caixagis123`
+   - Hostname: `sftp-caixagis`
+   - Port: `22`
+
+2. Teste manualmente:
+   ```bash
+   docker exec -it nifi bash
+   sftp -P 22 caixagis@sftp-caixagis
+   # Senha: caixagis123
+   ls /download
+   exit
+   ```
+
+---
+
+### CSV com encoding errado (caracteres estranhos como �)
+
+**Causa**: Encoding incorreto configurado no CSVReader.
+
+**Solução**:
+1. No CSVReader, teste diferentes encodings:
+   - `UTF-8` (padrão)
+   - `ISO-8859-1` (comum em sistemas antigos)
+   - `Windows-1252` (comum em arquivos do Windows)
+
+2. Ou converta o arquivo antes:
+   ```bash
+   cd ../caixagis-sftp/data/download
+   iconv -f ISO-8859-1 -t UTF-8 arquivo.csv > arquivo_utf8.csv
+   ```
+
+---
+
+### FlowFiles ficam presos na fila
+
+**Causa**: Erro de processamento não visível.
+
+**Solução**:
+1. Clique com botão direito no processor → **View Configuration** → **Settings**
+2. Altere **Bulletin Level** para `DEBUG`
+3. Veja os logs:
+   ```bash
+   docker compose logs -f nifi | grep ERROR
+   ```
+4. Verifique os bulletins no canto superior direito da interface
+
+---
+
+### Nenhum arquivo é baixado do SFTP
+
+**Causa**: Não há arquivos correspondentes ao filtro, ou polling não está funcionando.
+
+**Solução**:
+1. Verifique se há arquivos CSV na pasta:
+   ```bash
+   cd ../caixagis-sftp
+   ls -la data/download/*.csv
+   ```
+
+2. No GetSFTP, verifique:
+   - **File Filter Regex**: `.*\.csv`
+   - **Remote Path**: `/download`
+
+3. Force uma execução manual:
+   - Clique com botão direito no GetSFTP → **Run Once**
+
+---
+
+### Dados duplicados no banco
+
+**Causa**: O mesmo arquivo está sendo processado múltiplas vezes.
+
+**Solução**:
+1. Configure **Delete Original** como `true` no GetSFTP (remove arquivo após download)
+2. Ou configure **Move Destination Directory** para mover arquivos processados para outra pasta
+3. Ou adicione constraint UNIQUE na coluna `id` da tabela:
+   ```sql
+   ALTER TABLE dados_csv ADD CONSTRAINT dados_csv_id_unique UNIQUE (id);
+   ```
+
+---
+
+## Alternativas e Otimizações
+
+### Opção 1: Processar sem SplitText (para arquivos pequenos)
+
+Se seus arquivos CSV têm menos de 1000 linhas, você pode remover o SplitText:
+
+```
+GetSFTP → ConvertRecord → UpdateRecord → PutDatabaseRecord
+```
+
+### Opção 2: Usar UPSERT ao invés de INSERT
+
+Para evitar duplicatas e atualizar registros existentes:
+
+1. No **PutDatabaseRecord**, altere:
+   - **Statement Type**: `INSERT`
+   - **Update Keys**: `id`
+   - Isso fará um INSERT ou UPDATE baseado no campo `id`
+
+### Opção 3: Adicionar Validação de Dados
+
+1. Adicione **ValidateRecord** após o ConvertRecord
+2. Configure um schema para validar os campos obrigatórios
+3. Conecte:
+   - **valid** → UpdateRecord
+   - **invalid** → LogAttribute (para registrar dados inválidos)
+
+### Opção 4: Particionar por Tipo ou Situação
+
+Se você quiser processar diferentes tipos de dados de forma diferente:
+
+1. Adicione **PartitionRecord** ou **RouteOnAttribute**
+2. Configure rotas baseadas no campo **tipo** ou **situacao**
+3. Processe cada partição em fluxos separados
+
+---
+
+## Monitoramento e Métricas
+
+### Ver Estatísticas do Fluxo
+
+1. Menu hambúrguer (☰) → **Summary**
+2. Veja estatísticas de cada processor:
+   - FlowFiles In/Out
+   - Bytes In/Out
+   - Tasks/Time
+   - Erros
+
+### Configurar Alertas
+
+1. Menu hambúrguer (☰) → **Controller Settings** → **Reporting Tasks**
+2. Adicione **Bulletin Reporter** para enviar alertas
+3. Configure notificações por email, Slack, etc.
+
+### Exportar Métricas
+
+1. Configure **PrometheusReportingTask** para exportar métricas
+2. Integre com Grafana para dashboards visuais
 
 ---
 
 ## Próximos Passos
 
-1. Adicione validação de dados
-2. Configure retry em caso de falha
-3. Implemente tratamento de duplicatas
-4. Adicione notificações (email, Slack, etc)
-5. Configure backup dos dados
-6. Implemente versionamento do fluxo
+1. **Implementar auditoria**: Crie uma tabela de controle para rastrear:
+   - Arquivo processado
+   - Data/hora
+   - Quantidade de registros
+   - Status (sucesso/falha)
+
+2. **Adicionar notificações**: Configure email ou webhook para alertas de falha
+
+3. **Implementar backup**: Mova arquivos processados para uma pasta de backup
+
+4. **Configurar schedules**: Ajuste os intervalos de polling conforme necessidade
+
+5. **Adicionar transformações**: Use **QueryRecord** ou **JoltTransformJSON** para transformações complexas
+
+6. **Implementar versionamento**: Salve o fluxo como template e versione no Git
 
 ---
 
-**Boa sorte com seu fluxo ETL no Apache NiFi!**
+## Exemplo de Tabela de Controle de Importação
+
+```sql
+CREATE TABLE IF NOT EXISTS controle_importacao (
+    id SERIAL PRIMARY KEY,
+    arquivo_nome VARCHAR(255) NOT NULL,
+    arquivo_tamanho BIGINT,
+    data_processamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    registros_processados INTEGER,
+    registros_sucesso INTEGER,
+    registros_falha INTEGER,
+    status VARCHAR(50),
+    mensagem_erro TEXT,
+    tempo_processamento_ms BIGINT
+);
+```
+
+Use um **PutSQL** adicional paralelo ao fluxo principal para registrar cada processamento.
+
+---
+
+**Parabéns! Você criou um fluxo ETL completo de SFTP para PostgreSQL usando Apache NiFi!** 🎉
+
+Para mais informações, consulte:
+- [Documentação oficial do Apache NiFi](https://nifi.apache.org/docs.html)
+- README.md do projeto caixagis-sftp
+- Arquivo init.sql para estrutura da tabela

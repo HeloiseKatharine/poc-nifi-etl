@@ -6,7 +6,7 @@ Serviço SFTP simulando a CaixaGIS para POC (Proof of Concept). Este ambiente pe
 
 ```
 sftp/
-├── docker-compose.yml       # Configuração do Docker Compose
+├── docker-compose.yml ou compose.yml  # Configuração do Docker Compose
 ├── config/
 │   └── users.conf          # Configuração de usuários SFTP
 ├── data/
@@ -27,19 +27,19 @@ sftp/
 ### 1. Subir o serviço
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 2. Verificar se está rodando
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 ### 3. Ver logs
 
 ```bash
-docker-compose logs -f sftp-caixagis
+docker compose logs -f sftp-caixagis
 ```
 
 ## Como Testar a Conexão
@@ -73,39 +73,6 @@ cd upload           # Navegar para diretório upload
 put arquivo.txt     # Enviar arquivo
 get arquivo.txt     # Baixar arquivo
 exit               # Sair
-```
-
-## Testando com Python
-
-Você pode usar este script Python para testar a conexão:
-
-```python
-import paramiko
-
-# Configurações
-hostname = 'localhost'
-port = 2222
-username = 'caixagis'
-password = 'caixagis123'
-
-# Conectar
-transport = paramiko.Transport((hostname, port))
-transport.connect(username=username, password=password)
-sftp = paramiko.SFTPClient.from_transport(transport)
-
-# Listar arquivos
-print("Arquivos em /upload:")
-print(sftp.listdir('/upload'))
-
-# Upload de arquivo
-# sftp.put('local_file.txt', '/upload/remote_file.txt')
-
-# Download de arquivo
-# sftp.get('/download/remote_file.txt', 'local_file.txt')
-
-# Fechar conexão
-sftp.close()
-transport.close()
 ```
 
 ## Integração com NiFi
@@ -144,13 +111,13 @@ Antes de começar, certifique-se de que:
 
 1. O serviço SFTP está rodando:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 2. O NiFi e PostgreSQL estão rodando (no diretório pai):
    ```bash
    cd ..
-   docker-compose up -d
+   docker compose up -d
    ```
 
 3. Os containers estão na mesma rede Docker ou podem se comunicar
@@ -177,7 +144,7 @@ Para que o NiFi possa acessar o SFTP, ambos precisam estar na mesma rede Docker.
 
 ### Opção 1: Conectar o SFTP à rede do NiFi
 
-Edite o `docker-compose.yml` do SFTP e adicione a rede externa:
+Edite o arquivo `docker-compose.yml` ou `compose.yml` do SFTP e adicione a rede externa:
 
 ```yaml
 services:
@@ -197,8 +164,8 @@ networks:
 Depois, reinicie o serviço:
 
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ### Opção 2: Verificar conectividade
@@ -523,7 +490,7 @@ EOF
 
 2. **Ver logs:**
    - Clique com botão direito no processor → **View Status History**
-   - Ou veja os logs do container: `docker-compose logs -f nifi`
+   - Ou veja os logs do container: `docker compose logs -f nifi`
 
 3. **Verificar contadores:**
    - Cada processor mostra quantos flowfiles foram processados
@@ -652,7 +619,7 @@ Para adicionar metadados ou timestamps:
 2. Reinicie o NiFi:
    ```bash
    cd ..
-   docker-compose restart nifi
+   docker compose restart nifi
    ```
 
 ---
@@ -681,7 +648,7 @@ Para adicionar metadados ou timestamps:
 **Solução:**
 1. Clique com botão direito no processor → **View Configuration**
 2. Vá para **Settings** → **Bulletin Level**: `DEBUG`
-3. Veja os logs: `docker-compose logs -f nifi`
+3. Veja os logs: `docker compose logs -f nifi`
 4. Verifique se há erros nos bulletins (canto superior direito)
 
 ---
@@ -705,7 +672,7 @@ Para adicionar metadados ou timestamps:
 **Solução:**
 1. Use o **SplitText** para quebrar o arquivo em pedaços menores
 2. Aumente os timeouts no GetSFTP
-3. Aumente a memória do NiFi no docker-compose:
+3. Aumente a memória do NiFi no arquivo de configuração do Compose:
    ```yaml
    environment:
      - NIFI_JVM_HEAP_MAX=4g
@@ -837,13 +804,13 @@ echo "Arquivo de teste" > data/download/teste.txt
 ## Parar o Serviço
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## Remover Volumes e Dados
 
 ```bash
-docker-compose down -v
+docker compose down -v
 rm -rf data/*
 ```
 
@@ -868,7 +835,7 @@ netstat -an | grep 2222
 ### Ver logs detalhados
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ## Segurança

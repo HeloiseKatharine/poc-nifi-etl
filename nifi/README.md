@@ -45,6 +45,13 @@ Para alterar, edite o arquivo [.env](.env) antes de iniciar o container.
 ### 3. Iniciar o Apache NiFi
 
 ```bash
+docker network create nifi_network
+```
+
+Este comando irá:
+- Criar a rede manualmente
+
+```bash
 docker compose up -d
 ```
 

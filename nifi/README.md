@@ -217,12 +217,42 @@ Para ambiente de produção, você deve:
 - Revisar as configurações de segurança do NiFi
 - Não expor a porta 8443 diretamente na internet
 
+## Fluxo ETL Implementado
+
+Este projeto inclui um fluxo ETL completo que demonstra como:
+
+```
+GetSFTP → SplitText → ConvertRecord → RenameRecordField → PutDatabaseRecord
+```
+
+### Componentes do Fluxo
+
+1. **GetSFTP (v2.2.0)**: Conecta ao servidor SFTP e baixa arquivos CSV da pasta `/download`
+2. **SplitText (v2.2.0)**: Divide o arquivo CSV em blocos de 100 linhas para processamento eficiente
+3. **ConvertRecord (v2.2.0)**: Converte o formato CSV para registros estruturados usando CSVReader
+4. **RenameRecordField (v2.2.0)**: Renomeia campos do CSV (ex: "ID" → "id", "Situação" → "situacao")
+5. **PutDatabaseRecord (v2.2.0)**: Insere os registros no PostgreSQL na tabela `dados_csv`
+
+### Mapeamento de Campos
+
+O fluxo transforma campos do CSV para o formato do banco de dados:
+
+| Campo CSV       | Campo Banco     |
+|-----------------|-----------------|
+| ID              | id              |
+| Projeto         | projeto         |
+| Tipo            | tipo            |
+| Situação        | situacao        |
+| Título          | titulo          |
+| Descrição       | descricao       |
+| Últimas notas   | ultimas_notas   |
+
 ## Próximos Passos
 
 Após ter o NiFi rodando, você pode:
 
-1. **Seguir o tutorial completo**: Consulte o arquivo [TUTORIAL_FLUXO_NIFI.md](TUTORIAL_FLUXO_NIFI.md) para criar um fluxo ETL completo
-2. **Visualizar os diagramas**: Veja o [DIAGRAMA_FLUXO.md](DIAGRAMA_FLUXO.md) para entender o fluxo de dados
+1. **Seguir o tutorial completo**: Consulte o arquivo [TUTORIAL_FLUXO_NIFI.md](TUTORIAL_FLUXO_NIFI.md) para criar o fluxo ETL passo a passo
+2. **Visualizar os diagramas**: Veja o [DIAGRAMA_FLUXO.md](DIAGRAMA_FLUXO.md) para entender o fluxo de dados visualmente
 3. Criar seu primeiro workflow arrastando processadores na interface
 4. Conectar-se a fontes de dados (APIs, bancos de dados, arquivos, etc.)
 5. Configurar processadores para transformar e rotear dados

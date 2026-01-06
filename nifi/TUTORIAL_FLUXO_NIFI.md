@@ -30,6 +30,14 @@ CREATE TABLE public.dados_csv (
 GetSFTP → SplitText → ConvertRecord → RenameRecordField → PutDatabaseRecord
 ```
 
+### Detalhamento dos Processors
+
+1. **GetSFTP (2.2.0)**: Conecta ao servidor SFTP e baixa arquivos CSV
+2. **SplitText (2.2.0)**: Divide o arquivo CSV em blocos menores para processamento
+3. **ConvertRecord (2.2.0)**: Converte o formato CSV para registros estruturados
+4. **RenameRecordField (2.2.0)**: Renomeia os campos do CSV para corresponder à tabela do banco
+5. **PutDatabaseRecord (2.2.0)**: Insere os registros no PostgreSQL
+
 ### Mapeamento de Campos CSV → Banco de Dados
 
 O CSV de origem possui campos com maiúsculas e acentuação que precisam ser renomeados:
@@ -264,44 +272,31 @@ O RenameRecordField renomeará os campos do CSV para corresponder aos nomes das 
 
 1. **Adicionar o Processor:**
    - Arraste um **Processor** para o canvas
-   - Digite `UpdateRecord`
+   - Digite `RenameRecordField`
    - Clique em **ADD**
 
-   > **Nota**: Usaremos o **UpdateRecord** ao invés de RenameRecordField, pois é mais flexível e permite múltiplas renomeações.
+2. **Configurar o RenameRecordField:**
+   - **Record Reader**: Selecione o `CSVReader` criado anteriormente
+   - **Record Writer**: Selecione o `JsonRecordSetWriter` criado anteriormente
 
-2. **Configurar o UpdateRecord:**
-   - **Record Reader**: Selecione o `JsonRecordSetWriter` criado
-   - **Record Writer**: Selecione o `JsonRecordSetWriter` criado
-   - **Replacement Value Strategy**: `Record Path Value`
+3. **Adicionar Mapeamentos de Campos** (clique no **+** para adicionar propriedades customizadas):
 
-3. **Adicionar Propriedades Customizadas** (clique no **+**):
+   Adicione cada mapeamento no formato `/campo_origem` → `/campo_destino`:
 
-   Adicione cada mapeamento de campo (nome → valor):
+   | Nome da Propriedade | Valor da Propriedade |
+   |---------------------|---------------------|
+   | `/ID`               | `/id`               |
+   | `/Projeto`          | `/projeto`          |
+   | `/Tipo`             | `/tipo`             |
+   | `/Situação`         | `/situacao`         |
+   | `/Título`           | `/titulo`           |
+   | `/Descrição`        | `/descricao`        |
+   | `/Últimas notas`    | `/ultimas_notas`    |
 
-   ```
-   Nome da Propriedade: /id
-   Valor: /ID
-
-   Nome da Propriedade: /projeto
-   Valor: /Projeto
-
-   Nome da Propriedade: /tipo
-   Valor: /Tipo
-
-   Nome da Propriedade: /situacao
-   Valor: /Situação
-
-   Nome da Propriedade: /titulo
-   Valor: /Título
-
-   Nome da Propriedade: /descricao
-   Valor: /Descrição
-
-   Nome da Propriedade: /ultimas_notas
-   Valor: /Últimas notas
-   ```
+   > **Importante**: O RenameRecordField usa o formato `/campo_origem` como nome da propriedade e `/campo_destino` como valor.
 
 4. **Configurar Relationships:**
+   - Vá para a aba **SETTINGS**
    - Marque para **auto-terminate**:
      - `failure`
    - Deixe **success** desmarcado
@@ -310,9 +305,9 @@ O RenameRecordField renomeará os campos do CSV para corresponder aos nomes das 
 
 ---
 
-### 3.7 Conectar ConvertRecord ao UpdateRecord
+### 3.7 Conectar ConvertRecord ao RenameRecordField
 
-1. Arraste a seta do **ConvertRecord** até o **UpdateRecord**
+1. Arraste a seta do **ConvertRecord** até o **RenameRecordField**
 2. Selecione **success**
 3. Clique em **ADD**
 
@@ -353,9 +348,9 @@ Este processor inserirá os dados no PostgreSQL.
 
 ---
 
-### 3.9 Conectar UpdateRecord ao PutDatabaseRecord
+### 3.9 Conectar RenameRecordField ao PutDatabaseRecord
 
-1. Arraste a seta do **UpdateRecord** até o **PutDatabaseRecord**
+1. Arraste a seta do **RenameRecordField** até o **PutDatabaseRecord**
 2. Selecione **success**
 3. Clique em **ADD**
 
@@ -556,57 +551,103 @@ ORDER BY quantidade DESC;
 ## Diagrama do Fluxo Completo
 
 ```
-┌──────────────────┐
-│                  │
-│    GetSFTP       │  ← Conecta ao servidor SFTP caixagis-sftp
-│  (sftp-caixagis) │    Baixa arquivos CSV da pasta /download
-│                  │
-└────────┬─────────┘
-         │ success
-         │ (arquivo CSV completo)
-         ↓
-┌──────────────────┐
-│                  │
-│   SplitText      │  ← Divide o CSV em blocos de 100 linhas
-│  (100 linhas)    │    Mantém o cabeçalho em cada bloco
-│                  │
-└────────┬─────────┘
-         │ splits
-         │ (múltiplos flowfiles com blocos do CSV)
-         ↓
-┌──────────────────┐
-│                  │
-│  ConvertRecord   │  ← Converte CSV para formato Record
-│  (CSV → Record)  │    Valida a estrutura dos dados
-│                  │
-└────────┬─────────┘
-         │ success
-         │ (registros estruturados)
-         ↓
-┌──────────────────┐
-│                  │
-│  UpdateRecord    │  ← Renomeia os campos do CSV
-│  (Renomear)      │    ID→id, Projeto→projeto, etc.
-│                  │
-└────────┬─────────┘
-         │ success
-         │ (campos renomeados)
-         ↓
-┌──────────────────┐
-│                  │
-│PutDatabaseRecord │  ← Insere os dados no PostgreSQL
-│   (dados_csv)    │    Tabela: dados_csv
-│                  │
-└────────┬─────────┘
-         │ success
-         │
-         ↓
-┌──────────────────┐
-│                  │
-│  LogAttribute    │  ← Log de sucesso (opcional)
-│  (Monitoramento) │
-│                  │
-└──────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                           FLUXO ETL COMPLETO                         │
+│                      SFTP CSV → PostgreSQL                           │
+└──────────────────────────────────────────────────────────────────────┘
+
+    Servidor SFTP (sftp-caixagis)
+    /download/*.csv
+           │
+           │ SFTP Connection
+           │ Port 22
+           ↓
+    ┌─────────────────┐
+    │                 │
+    │    GetSFTP      │  ← Conecta ao servidor SFTP
+    │    (v2.2.0)     │    Host: sftp-caixagis
+    │                 │    Path: /download
+    │                 │    Filter: *.csv
+    └────────┬────────┘
+             │ success
+             │ (arquivo CSV completo)
+             ↓
+    ┌─────────────────┐
+    │                 │
+    │   SplitText     │  ← Divide o CSV em blocos
+    │   (v2.2.0)      │    Line Split Count: 100
+    │                 │    Header Line Count: 1
+    └────────┬────────┘
+             │ splits
+             │ (múltiplos flowfiles com blocos)
+             ↓
+    ┌─────────────────┐
+    │                 │
+    │ ConvertRecord   │  ← Converte CSV → Record
+    │   (v2.2.0)      │    Reader: CSVReader
+    │                 │    Writer: JsonRecordSetWriter
+    └────────┬────────┘
+             │ success
+             │ (registros estruturados)
+             ↓
+    ┌─────────────────────┐
+    │                     │
+    │ RenameRecordField   │  ← Renomeia campos
+    │     (v2.2.0)        │    ID → id
+    │                     │    Projeto → projeto
+    │                     │    Situação → situacao
+    │                     │    Título → titulo
+    │                     │    Descrição → descricao
+    │                     │    Últimas notas → ultimas_notas
+    └────────┬────────────┘
+             │ success
+             │ (campos renomeados)
+             ↓
+    ┌─────────────────────┐
+    │                     │
+    │ PutDatabaseRecord   │  ← Insere no PostgreSQL
+    │     (v2.2.0)        │    Host: postgres:5432
+    │                     │    Table: dados_csv
+    │                     │    Type: INSERT
+    └────────┬────────────┘
+             │ success
+             │
+             ↓
+         PostgreSQL
+    Table: dados_csv
+    Columns: id, projeto, tipo,
+             situacao, titulo,
+             descricao, ultimas_notas
+```
+
+### Visualização do Canvas Real
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Apache NiFi - Flow Canvas                                    │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│   [GetSFTP]────────────────────────────────────────────┐       │
+│        │                                                │       │
+│        │ success (Queue: 0)                             │       │
+│        ↓                                                │       │
+│   [SplitText]                          original_splits  │       │
+│        │                               (Queue: 112)     │       │
+│        │ splits (Queue: 0)                   └──────────┘       │
+│        ↓                                                        │
+│   [ConvertRecord]                                               │
+│        │                                                        │
+│        │ success (Queue: 0)                                     │
+│        ↓                                                        │
+│   [RenameRecordField]                                           │
+│        │                                                        │
+│        │ success (Queue: 0)                                     │
+│        ↓                                                        │
+│   [PutDatabaseRecord]                                           │
+│                                                                │
+│  Status: ▶ Running    Tasks/Time: 0 / 00:00:00.000            │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ---

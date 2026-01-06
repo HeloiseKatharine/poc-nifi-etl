@@ -1,65 +1,77 @@
 # Diagrama Visual do Fluxo NiFi
 
-## Fluxo Simplificado (Quick Start)
+## Fluxo ETL: SFTP CSV → PostgreSQL
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         FLUXO COMPLETO                              │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                    FLUXO COMPLETO: CSV ETL                           │
+│                  SFTP → Transformação → PostgreSQL                   │
+└──────────────────────────────────────────────────────────────────────┘
 
-API Externa                                              Banco SQLite
+Servidor SFTP                                             PostgreSQL
+sftp-caixagis                                             postgres:5432
+/download/*.csv                                           dados_csv
      │                                                         ▲
-     │ GET Request                                             │
+     │ SFTP Port 22                                            │
+     │ User: caixagis                                          │
      ▼                                                         │
 ┌──────────────┐                                              │
 │              │                                              │
-│ InvokeHTTP   │  Faz requisição GET para API                 │
-│              │  https://api.exemplo.com/users               │
-└──────┬───────┘                                              │
+│   GetSFTP    │  Conecta ao SFTP e baixa CSV                 │
+│   (v2.2.0)   │  Remote Path: /download                      │
+│              │  File Filter: .*\.csv                        │
+└──────┬───────┘  Polling: 60 sec                             │
        │                                                       │
-       │ Response (JSON Array)                                │
-       │ [{"id":1, "name":"João"}, ...]                       │
+       │ success                                               │
+       │ (arquivo CSV completo)                                │
+       │ Content: ID,Projeto,Tipo,Situação,...                 │
        ▼                                                       │
 ┌──────────────┐                                              │
 │              │                                              │
-│  SplitJson   │  Divide array em FlowFiles individuais       │
-│              │  Cada objeto JSON vira um FlowFile           │
+│  SplitText   │  Divide CSV em blocos de 100 linhas          │
+│  (v2.2.0)    │  Mantém header em cada bloco                 │
+│              │  Header Line Count: 1                        │
 └──────┬───────┘                                              │
        │                                                       │
-       │ split (múltiplos FlowFiles)                          │
-       │ FlowFile 1: {"id":1, "name":"João"}                  │
-       │ FlowFile 2: {"id":2, "name":"Maria"}                 │
+       │ splits (múltiplos FlowFiles)                          │
+       │ FlowFile 1: (linhas 1-100)                            │
+       │ FlowFile 2: (linhas 101-200)                          │
        ▼                                                       │
 ┌─────────────────────┐                                       │
 │                     │                                       │
-│ EvaluateJsonPath    │  Extrai campos do JSON               │
-│                     │  e cria atributos:                    │
-│  $.id → user.id     │  - user.id = 1                        │
-│  $.name → user.name │  - user.name = João                   │
-│  $.email → ...      │  - user.email = joao@...              │
-│                     │                                       │
+│  ConvertRecord      │  Converte CSV → Record               │
+│    (v2.2.0)         │  Reader: CSVReader                    │
+│                     │  Writer: JsonRecordSetWriter          │
+│                     │  Schema: From Header                  │
 └──────┬──────────────┘                                       │
        │                                                       │
-       │ matched (FlowFile com atributos)                     │
+       │ success (registros estruturados)                      │
+       │ Record: {ID:1, Projeto:"X", ...}                      │
        ▼                                                       │
 ┌──────────────────────┐                                      │
 │                      │                                      │
-│ AttributesToJSON     │  Converte atributos de volta         │
-│                      │  para JSON no conteúdo:              │
-│                      │  Content: {"user.id":1, ...}         │
-│                      │                                      │
+│ RenameRecordField    │  Renomeia campos do CSV              │
+│     (v2.2.0)         │  Transformações:                     │
+│                      │  /ID → /id                           │
+│ Reader: CSVReader    │  /Projeto → /projeto                 │
+│ Writer: JsonRecordWr │  /Situação → /situacao               │
+│                      │  /Título → /titulo                   │
+│                      │  /Descrição → /descricao             │
+│                      │  /Últimas notas → /ultimas_notas     │
 └──────┬───────────────┘                                      │
        │                                                       │
-       │ success (JSON válido)                                │
+       │ success (campos renomeados)                           │
+       │ Record: {id:1, projeto:"X", ...}                      │
        ▼                                                       │
 ┌──────────────────────┐                                      │
 │                      │                                      │
-│ PutDatabaseRecord    │  Lê JSON e insere no banco          │
-│                      │  INSERT INTO users ...              │
-│ Reader: JsonTreeRead │                                      │
-│ Table: users         │                                      │
-│                      │─────────────────────────────────────┘
-│                      │
+│ PutDatabaseRecord    │  Insere registros no PostgreSQL      │
+│     (v2.2.0)         │  INSERT INTO dados_csv               │
+│                      │  (id, projeto, tipo,                 │
+│ Reader: JsonRecordWr │   situacao, titulo,                  │
+│ Table: dados_csv     │   descricao, ultimas_notas)          │
+│ DB: DBCPConnectionPl │  VALUES (...)                         │
+│                      │──────────────────────────────────────┘
 └──────────────────────┘
        │
        │ success
@@ -72,60 +84,61 @@ API Externa                                              Banco SQLite
 ## Fluxo com Tratamento de Erros
 
 ```
-                                API Externa
+                        Servidor SFTP (sftp-caixagis)
                                      │
-                                     │ GET
+                                     │ Port 22
                                      ▼
                             ┌──────────────┐
                             │              │
-                            │ InvokeHTTP   │
-                            │              │
+                            │   GetSFTP    │
+                            │   (v2.2.0)   │
                             └──────┬───────┘
                                    │
-                    ┌──────────────┼──────────────┐
-                    │              │              │
-               Response        Failure        No Retry
-                    │              │              │
-                    ▼              ▼              ▼
-            ┌──────────┐    ┌────────────┐  [Terminate]
+                    ┌──────────────┼──────────────────────┐
+                    │              │                      │
+               success      permission.denied      not.found/failure
+                    │              │                      │
+                    ▼              ▼                      ▼
+            ┌──────────┐    ┌────────────┐         [Terminate]
             │          │    │            │
-            │SplitJson │    │LogAttribute│
-            │          │    │  (Error)   │
+            │SplitText │    │LogAttribute│
+            │ (v2.2.0) │    │  (Error)   │
             └────┬─────┘    └──────┬─────┘
                  │                 │
         ┌────────┼────────┐        │
         │        │        │        ▼
-     split   original  failure  ┌─────────┐
-        │        │        │      │ PutFile │
-        ▼        ▼        ▼      │ (Erros) │
-   ┌─────────┐  [Term]  [Term]   └─────────┘
-   │Evaluate │
-   │JsonPath │
-   └────┬────┘
+     splits  original failure  ┌─────────┐
+        │        │        │     │ PutFile │
+        ▼        ▼        ▼     │ (Erros) │
+   ┌──────────┐ [Term]  [Term]  └─────────┘
+   │Convert   │
+   │ Record   │
+   │(v2.2.0)  │
+   └────┬─────┘
         │
-    ┌───┼────┐
-    │   │    │
-matched │ unmatched
-    │   │    │
-    ▼   ▼    ▼
-  ┌────────────┐  ┌────────────┐
-  │Attributes  │  │LogAttribute│
-  │  ToJSON    │  │(Unmatched) │
-  └─────┬──────┘  └────────────┘
+    ┌───┼─────┐
+    │   │     │
+success │  failure
+    │   │     │
+    ▼   ▼     ▼
+  ┌────────────────┐  ┌────────────┐
+  │RenameRecord    │  │LogAttribute│
+  │Field (v2.2.0)  │  │ (Error)    │
+  └─────┬──────────┘  └────────────┘
         │
     ┌───┼────┐
     │   │    │
 success │ failure
     │   │    │
     ▼   ▼    ▼
-  ┌──────────────┐  ┌─────────┐
-  │PutDatabase   │  │ PutFile │
-  │   Record     │  │(Failures)│
-  └──────┬───────┘  └─────────┘
+  ┌──────────────────┐  ┌─────────┐
+  │PutDatabaseRecord │  │ PutFile │
+  │    (v2.2.0)      │  │(Failures)│
+  └──────┬───────────┘  └─────────┘
          │
      ┌───┼────┐
      │   │    │
- success │  retry
+ success │  retry/failure
      │   │    │
      ▼   ▼    ▼
   [Term] │  [Term]
@@ -141,131 +154,167 @@ success │ failure
 
 ## Componentes Detalhados
 
-### 1. InvokeHTTP
+### 1. GetSFTP (v2.2.0)
 ```
 ┌─────────────────────────────────────────┐
-│          InvokeHTTP                     │
+│            GetSFTP                      │
 ├─────────────────────────────────────────┤
 │ Configuração:                           │
-│  • HTTP Method: GET                     │
-│  • Remote URL: https://api.com/users    │
+│  • Hostname: sftp-caixagis              │
+│  • Port: 22                             │
+│  • Username: caixagis                   │
+│  • Password: caixagis123                │
+│  • Remote Path: /download               │
+│  • File Filter Regex: .*\.csv           │
+│  • Polling Interval: 60 sec             │
 │  • Connection Timeout: 30 sec           │
-│  • Read Timeout: 30 sec                 │
+│  • Data Timeout: 30 sec                 │
+│  • Delete Original: false               │
+│  • Strict Host Key Checking: false      │
 │                                         │
 │ Scheduling:                             │
 │  • Run Schedule: 60 sec                 │
 │  • Concurrent Tasks: 1                  │
 │                                         │
 │ Saídas:                                 │
-│  • Response ─────→ (FlowFile com JSON)  │
-│  • Failure ──────→ [Auto-terminate]     │
-│  • Retry ────────→ [Auto-terminate]     │
-│  • No Retry ─────→ [Auto-terminate]     │
+│  • success ──────→ (FlowFile com CSV)   │
+│  • not.found ────→ [Auto-terminate]     │
+│  • permission.den→ [Auto-terminate]     │
+│  • failure ──────→ [Auto-terminate]     │
 └─────────────────────────────────────────┘
 ```
 
-### 2. SplitJson
+### 2. SplitText (v2.2.0)
 ```
 ┌─────────────────────────────────────────┐
-│           SplitJson                     │
+│           SplitText                     │
 ├─────────────────────────────────────────┤
 │ Entrada:                                │
-│  Content: [                             │
-│    {"id":1, "name":"João"},             │
-│    {"id":2, "name":"Maria"}             │
-│  ]                                      │
+│  Content:                               │
+│    ID,Projeto,Tipo,Situação,...         │
+│    1,Sistema X,Demanda,Aberto,...       │
+│    2,Portal Y,Bug,Fechado,...           │
+│    ... (mais 1000 linhas)               │
 │                                         │
 │ Configuração:                           │
-│  • JsonPath: $                          │
+│  • Line Split Count: 100                │
+│  • Maximum Fragment Size: 0             │
+│  • Header Line Count: 1                 │
+│  • Remove Trailing Newlines: true       │
 │                                         │
 │ Saídas:                                 │
-│  • split ────→ FlowFile 1: {"id":1...}  │
-│           └──→ FlowFile 2: {"id":2...}  │
+│  • splits ───→ FlowFile 1: (100 linhas) │
+│           └──→ FlowFile 2: (100 linhas) │
+│           └──→ FlowFile N...            │
 │  • original ─→ [Auto-terminate]         │
 │  • failure ──→ [Auto-terminate]         │
 └─────────────────────────────────────────┘
 ```
 
-### 3. EvaluateJsonPath
+### 3. ConvertRecord (v2.2.0)
 ```
 ┌─────────────────────────────────────────┐
-│        EvaluateJsonPath                 │
+│        ConvertRecord                    │
 ├─────────────────────────────────────────┤
 │ Entrada:                                │
-│  Content: {"id":1, "name":"João"}       │
-│                                         │
-│ Extração (Properties):                  │
-│  user.id     ← $.id                     │
-│  user.name   ← $.name                   │
-│  user.email  ← $.email                  │
-│  user.phone  ← $.phone                  │
-│  user.website← $.website                │
-│                                         │
-│ Saída:                                  │
-│  Attributes:                            │
-│    user.id = "1"                        │
-│    user.name = "João"                   │
-│    user.email = "joao@exemplo.com"      │
-│    ...                                  │
-│                                         │
-│ Relationships:                          │
-│  • matched ──→ (tem todos os campos)    │
-│  • unmatched → (faltam campos)          │
-│  • failure ──→ (erro no parse)          │
-└─────────────────────────────────────────┘
-```
-
-### 4. AttributesToJSON
-```
-┌─────────────────────────────────────────┐
-│        AttributesToJSON                 │
-├─────────────────────────────────────────┤
-│ Entrada (Attributes):                   │
-│  user.id = "1"                          │
-│  user.name = "João"                     │
-│  user.email = "joao@exemplo.com"        │
+│  Content: CSV com header                │
+│    ID,Projeto,Tipo,...                  │
+│    1,Sistema X,Demanda,...              │
 │                                         │
 │ Configuração:                           │
-│  • Attributes List:                     │
-│    user.id,user.name,user.email,...     │
-│  • Destination: flowfile-content        │
-│  • Include Core Attributes: false       │
+│  • Record Reader: CSVReader             │
+│    - Schema Access: Use String Fields   │
+│      From Header                        │
+│    - Treat First Line as Header: true   │
+│    - Charset: UTF-8                     │
+│  • Record Writer: JsonRecordSetWriter   │
+│    - Schema Write Strategy: Do Not Write│
+│    - Schema Access: Inherit Record      │
+│  • Include Zero Record FlowFiles: false │
 │                                         │
-│ Saída (Content):                        │
-│  {                                      │
-│    "user.id": "1",                      │
-│    "user.name": "João",                 │
-│    "user.email": "joao@exemplo.com"     │
-│  }                                      │
+│ Saída:                                  │
+│  Record estruturado:                    │
+│    {ID:1, Projeto:"Sistema X",          │
+│     Tipo:"Demanda", ...}                │
+│                                         │
+│ Relationships:                          │
+│  • success ──→ (conversão OK)           │
+│  • failure ──→ [Auto-terminate]         │
 └─────────────────────────────────────────┘
 ```
 
-### 5. PutDatabaseRecord
+### 4. RenameRecordField (v2.2.0)
+```
+┌─────────────────────────────────────────┐
+│        RenameRecordField                │
+├─────────────────────────────────────────┤
+│ Entrada (Record):                       │
+│  {ID:1, Projeto:"X", Tipo:"Demanda",    │
+│   Situação:"Aberto", Título:"Login",    │
+│   Descrição:"Sistema auth",             │
+│   "Últimas notas":"Em dev"}             │
+│                                         │
+│ Configuração:                           │
+│  • Record Reader: CSVReader             │
+│  • Record Writer: JsonRecordSetWriter   │
+│  • Field Renaming Properties:           │
+│    /ID → /id                            │
+│    /Projeto → /projeto                  │
+│    /Tipo → /tipo                        │
+│    /Situação → /situacao                │
+│    /Título → /titulo                    │
+│    /Descrição → /descricao              │
+│    /Últimas notas → /ultimas_notas      │
+│                                         │
+│ Saída (Record renomeado):               │
+│  {id:1, projeto:"X", tipo:"Demanda",    │
+│   situacao:"Aberto", titulo:"Login",    │
+│   descricao:"Sistema auth",             │
+│   ultimas_notas:"Em dev"}               │
+│                                         │
+│ Relationships:                          │
+│  • success ──→ (renomeação OK)          │
+│  • failure ──→ [Auto-terminate]         │
+└─────────────────────────────────────────┘
+```
+
+### 5. PutDatabaseRecord (v2.2.0)
 ```
 ┌─────────────────────────────────────────┐
 │       PutDatabaseRecord                 │
 ├─────────────────────────────────────────┤
-│ Entrada (Content):                      │
-│  {"user.id":"1", "user.name":"João"}    │
+│ Entrada (Record):                       │
+│  {id:1, projeto:"X", tipo:"Demanda",    │
+│   situacao:"Aberto", titulo:"Login",    │
+│   descricao:"Sistema auth",             │
+│   ultimas_notas:"Em dev"}               │
 │                                         │
 │ Configuração:                           │
-│  • Record Reader: JsonTreeReader        │
+│  • Record Reader: JsonRecordSetWriter   │
 │  • Statement Type: INSERT               │
-│  • Table Name: users                    │
+│  • Table Name: dados_csv                │
 │  • DBCP Service: DBCPConnectionPool     │
+│    - URL: jdbc:postgresql://postgres:   │
+│      5432/postgres                      │
+│    - Driver: org.postgresql.Driver      │
+│    - User: postgres                     │
+│    - Password: postgres                 │
 │  • Translate Field Names: true          │
 │  • Unmatched Fields: Ignore             │
+│  • Maximum Batch Size: 100              │
 │                                         │
 │ Processo:                               │
-│  1. Lê JSON via JsonTreeReader          │
-│  2. Mapeia campos para colunas:         │
-│     user.id → id                        │
-│     user.name → name                    │
+│  1. Lê Record via JsonRecordSetWriter   │
+│  2. Mapeia campos para colunas da       │
+│     tabela dados_csv                    │
 │  3. Gera SQL:                           │
-│     INSERT INTO users                   │
-│     (id, name, email, phone, website)   │
-│     VALUES (1, 'João', ...)             │
-│  4. Executa no SQLite                   │
+│     INSERT INTO dados_csv               │
+│     (id, projeto, tipo, situacao,       │
+│      titulo, descricao, ultimas_notas)  │
+│     VALUES (1, 'X', 'Demanda',          │
+│             'Aberto', 'Login',          │
+│             'Sistema auth', 'Em dev')   │
+│  4. Executa no PostgreSQL em batch      │
 │                                         │
 │ Saídas:                                 │
 │  • success ─→ (inserção OK)             │
@@ -279,28 +328,51 @@ success │ failure
 ## Controller Services
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│              CONTROLLER SERVICES                         │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. DBCPConnectionPool                                   │
-│     ┌──────────────────────────────────────┐            │
-│     │ • Driver: org.sqlite.JDBC            │            │
-│     │ • URL: jdbc:sqlite:/tmp/database.db  │            │
-│     │ • Driver Jar: .../sqlite-jdbc.jar    │            │
-│     │                                      │            │
-│     │ Status: [ENABLED] ⚡                 │            │
-│     └──────────────────────────────────────┘            │
-│                                                          │
-│  2. JsonTreeReader                                       │
-│     ┌──────────────────────────────────────┐            │
-│     │ • Schema Access: Infer Schema        │            │
-│     │ • Starting Field Strategy: Root Node │            │
-│     │                                      │            │
-│     │ Status: [ENABLED] ⚡                 │            │
-│     └──────────────────────────────────────┘            │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  CONTROLLER SERVICES                         │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  1. DBCPConnectionPool                                       │
+│     ┌────────────────────────────────────────────┐          │
+│     │ • Driver: org.postgresql.Driver            │          │
+│     │ • URL: jdbc:postgresql://postgres:5432/    │          │
+│     │   postgres                                 │          │
+│     │ • User: postgres                           │          │
+│     │ • Password: postgres                       │          │
+│     │ • Driver Location: /opt/nifi/nifi-current/ │          │
+│     │   lib/postgresql-jdbc.jar                  │          │
+│     │                                            │          │
+│     │ Status: [ENABLED] ⚡                       │          │
+│     └────────────────────────────────────────────┘          │
+│                                                              │
+│  2. CSVReader                                                │
+│     ┌────────────────────────────────────────────┐          │
+│     │ • Schema Access Strategy: Use String       │          │
+│     │   Fields From Header                       │          │
+│     │ • CSV Format: Custom Format                │          │
+│     │ • Value Separator: , (comma)               │          │
+│     │ • Skip Header Line: false                  │          │
+│     │ • Treat First Line as Header: true         │          │
+│     │ • Quote Character: "                       │          │
+│     │ • Escape Character: \                      │          │
+│     │ • Trim Fields: true                        │          │
+│     │ • Charset Encoding: UTF-8                  │          │
+│     │                                            │          │
+│     │ Status: [ENABLED] ⚡                       │          │
+│     └────────────────────────────────────────────┘          │
+│                                                              │
+│  3. JsonRecordSetWriter                                      │
+│     ┌────────────────────────────────────────────┐          │
+│     │ • Schema Write Strategy: Do Not Write      │          │
+│     │   Schema                                   │          │
+│     │ • Schema Access Strategy: Inherit Record   │          │
+│     │   Schema                                   │          │
+│     │ • Pretty Print JSON: false                 │          │
+│     │                                            │          │
+│     │ Status: [ENABLED] ⚡                       │          │
+│     └────────────────────────────────────────────┘          │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -309,99 +381,125 @@ success │ failure
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    LIFECYCLE DE UM FLOWFILE                  │
+│            LIFECYCLE DE UM FLOWFILE - CSV ETL                │
 └──────────────────────────────────────────────────────────────┘
 
 Estado Inicial: NENHUM FLOWFILE
                     │
                     │ Trigger: Run Schedule (60 sec)
+                    │ Verifica SFTP: /download/*.csv
                     ▼
         ┌──────────────────────┐
-        │   InvokeHTTP         │
-        │   Cria FlowFile      │
+        │   GetSFTP            │
+        │   Baixa CSV do SFTP  │
         └──────┬───────────────┘
                │
+               │ FlowFile criado:
                │ Attributes:
-               │  - filename: random-uuid
-               │  - invokehttp.status.code: 200
-               │  - mime.type: application/json
+               │  - filename: dados.csv
+               │  - path: /download
+               │  - file.size: 524288
+               │  - sftp.remote.host: sftp-caixagis
                │
-               │ Content:
-               │  [{"id":1,...}, {"id":2,...}, ...]
+               │ Content (arquivo CSV completo):
+               │  ID,Projeto,Tipo,Situação,Título,...
+               │  1,Sistema X,Demanda,Aberto,Login,...
+               │  2,Portal Y,Bug,Fechado,Menu,...
+               │  ... (1000 linhas)
                │
                ▼
         ┌──────────────────────┐
-        │   SplitJson          │
+        │   SplitText          │
         │   1 → N FlowFiles    │
         └──────┬───────────────┘
                │
-               ├─→ FlowFile 1
+               ├─→ FlowFile 1 (Split)
                │   Attributes:
                │    - fragment.index: 0
                │    - fragment.count: 10
+               │    - text.line.count: 100
                │   Content:
-               │    {"id":1, "name":"João", ...}
+               │    ID,Projeto,Tipo,Situação,...
+               │    1,Sistema X,Demanda,Aberto,...
+               │    ... (até linha 100)
                │
-               ├─→ FlowFile 2
+               ├─→ FlowFile 2 (Split)
                │   Attributes:
                │    - fragment.index: 1
                │   Content:
-               │    {"id":2, "name":"Maria", ...}
+               │    ID,Projeto,Tipo,Situação,...
+               │    101,App Z,Feature,Análise,...
+               │    ... (até linha 200)
                │
                └─→ ... (mais FlowFiles)
                    │
                    ▼
         ┌──────────────────────┐
-        │  EvaluateJsonPath    │
-        │  Adiciona Attributes │
+        │  ConvertRecord       │
+        │  CSV → Record        │
         └──────┬───────────────┘
                │
-               │ Attributes ADICIONADOS:
-               │  - user.id: "1"
-               │  - user.name: "João"
-               │  - user.email: "joao@exemplo.com"
-               │  - user.phone: "123-456"
-               │  - user.website: "site.com"
-               │
-               │ Content: (mantém o mesmo)
-               │  {"id":1, "name":"João", ...}
+               │ FlowFile transformado:
+               │ Content: (agora é um Record estruturado)
+               │  Record 1: {
+               │    ID: 1,
+               │    Projeto: "Sistema X",
+               │    Tipo: "Demanda",
+               │    Situação: "Aberto",
+               │    Título: "Login",
+               │    Descrição: "Sistema de autenticação",
+               │    Últimas notas: "Em desenvolvimento"
+               │  }
+               │  Record 2: {...}
+               │  ... (100 registros)
                │
                ▼
         ┌──────────────────────┐
-        │ AttributesToJSON     │
-        │ Reescreve Content    │
+        │ RenameRecordField    │
+        │ Renomeia campos      │
         └──────┬───────────────┘
                │
-               │ Attributes: (mantém)
-               │  - user.id: "1"
-               │  - user.name: "João"
-               │  ...
-               │
-               │ Content: (NOVO)
-               │  {
-               │    "user.id": "1",
-               │    "user.name": "João",
-               │    "user.email": "joao@exemplo.com",
-               │    "user.phone": "123-456",
-               │    "user.website": "site.com"
+               │ FlowFile com campos renomeados:
+               │ Content: (Record com nomes padronizados)
+               │  Record 1: {
+               │    id: 1,
+               │    projeto: "Sistema X",
+               │    tipo: "Demanda",
+               │    situacao: "Aberto",
+               │    titulo: "Login",
+               │    descricao: "Sistema de autenticação",
+               │    ultimas_notas: "Em desenvolvimento"
                │  }
+               │  Record 2: {...}
+               │  ... (100 registros)
                │
                ▼
         ┌──────────────────────┐
         │ PutDatabaseRecord    │
-        │ Insere no Banco      │
+        │ Insere no PostgreSQL │
         └──────┬───────────────┘
                │
-               │ SQL Executado:
-               │  INSERT INTO users
-               │  (id, name, email, phone, website, imported_at)
+               │ SQL Executado (batch):
+               │  INSERT INTO dados_csv
+               │  (id, projeto, tipo, situacao,
+               │   titulo, descricao, ultimas_notas)
                │  VALUES
-               │  (1, 'João', 'joao@exemplo.com', '123-456',
-               │   'site.com', '2025-12-29 15:30:00')
+               │  (1, 'Sistema X', 'Demanda', 'Aberto',
+               │   'Login', 'Sistema de autenticação',
+               │   'Em desenvolvimento'),
+               │  (2, 'Portal Y', 'Bug', 'Fechado',
+               │   'Menu', 'Menu lateral quebrado',
+               │   'Corrigido'),
+               │  ... (100 registros em batch)
                │
                ▼
          [FlowFile removido]
-         (auto-terminate success)
+         (success - auto-terminate)
+
+┌──────────────────────────────────────────────────────────────┐
+│ OBSERVAÇÃO: Este ciclo se repete para cada split do CSV     │
+│ Se o CSV tem 1000 linhas e split é 100, haverá 10 ciclos    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -409,42 +507,57 @@ Estado Inicial: NENHUM FLOWFILE
 ## Visualização do Canvas do NiFi
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Apache NiFi Canvas                                    [x]   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌────────────┐                                             │
-│  │ InvokeHTTP │ ◄─── In: 0 / Out: 10                        │
-│  └──────┬─────┘                                             │
-│         │                                                   │
-│         │ (Response) Queue: 0                               │
-│         ↓                                                   │
-│  ┌────────────┐                                             │
-│  │ SplitJson  │ ◄─── In: 10 / Out: 100                      │
-│  └──────┬─────┘                                             │
-│         │                                                   │
-│         │ (split) Queue: 0                                  │
-│         ↓                                                   │
-│  ┌────────────────┐                                         │
-│  │EvaluateJsonPath│ ◄─── In: 100 / Out: 100                 │
-│  └──────┬─────────┘                                         │
-│         │                                                   │
-│         │ (matched) Queue: 0                                │
-│         ↓                                                   │
-│  ┌─────────────────┐                                        │
-│  │AttributesToJSON │ ◄─── In: 100 / Out: 100                │
-│  └──────┬──────────┘                                        │
-│         │                                                   │
-│         │ (success) Queue: 0                                │
-│         ↓                                                   │
-│  ┌──────────────────┐                                       │
-│  │PutDatabaseRecord │ ◄─── In: 100 / Out: 100               │
-│  └──────────────────┘                                       │
-│                                                             │
-│  Status: All components running ▶                           │
-│  Last 5 min: 100 FlowFiles / 45 KB transferred              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Apache NiFi - Flow Canvas                                  [x]  │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────────┐                                         │
+│  │     GetSFTP         │  In: 0 bytes / 0 (0 bytes)              │
+│  │   GetSFTP 2.2.0     │  Out: 0 bytes / 0 (0 bytes)             │
+│  │                     │  Read/Write: 0 bytes/0 KB               │
+│  │   ┌─────────┐       │  Tasks/Time: 0 / 00:00:00.000           │
+│  │   │  sftp   │       │                                         │
+│  └───┴─────────┴───────┘                                         │
+│         │                                                        │
+│         │ success (Queue: 0 / 0 bytes)                           │
+│         ↓                                                        │
+│  ┌─────────────────────┐              ┌──────────────────┐      │
+│  │    SplitText        │──original────│  original_splits │      │
+│  │  SplitText 2.2.0    │  (112 bytes) │   (Queue: 112)   │      │
+│  │                     │              └──────────────────┘      │
+│  │   In: 0 / 0 bytes   │                                         │
+│  │   Out: 0 / 0 bytes  │                                         │
+│  └──────┬──────────────┘                                         │
+│         │                                                        │
+│         │ splits (Queue: 0 / 0 bytes)                            │
+│         ↓                                                        │
+│  ┌─────────────────────┐                                         │
+│  │   ConvertRecord     │  In: 0 / 0 bytes                        │
+│  │ ConvertRecord 2.2.0 │  Out: 0 / 0 bytes                       │
+│  │                     │  Tasks/Time: 0 / 00:00:00.000           │
+│  └──────┬──────────────┘                                         │
+│         │                                                        │
+│         │ success (Queue: 0 / 0 bytes)                           │
+│         ↓                                                        │
+│  ┌─────────────────────┐                                         │
+│  │ RenameRecordField   │  In: 0 / 0 bytes                        │
+│  │ RenameRecord.. 2.2.0│  Out: 0 / 0 bytes                       │
+│  │                     │  Tasks/Time: 0 / 00:00:00.000           │
+│  └──────┬──────────────┘                                         │
+│         │                                                        │
+│         │ success (Queue: 0 / 0 bytes)                           │
+│         ↓                                                        │
+│  ┌─────────────────────┐                                         │
+│  │ PutDatabaseRecord   │  In: 0 / 0 bytes                        │
+│  │ PutDatabase... 2.2.0│  Out: 0 / 0 bytes                       │
+│  │                     │  Tasks/Time: 0 / 00:00:00.000           │
+│  └─────────────────────┘                                         │
+│                                                                  │
+│  Status: ▶ 5 components running                                  │
+│  NiFi Flow: SFTP → CSV → Transform → PostgreSQL                 │
+│  Last 5 min: 0 FlowFiles / 0 KB transferred                     │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---

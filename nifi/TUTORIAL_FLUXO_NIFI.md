@@ -72,7 +72,7 @@ Antes de criar o fluxo, precisamos configurar os serviços de leitura/escrita de
 
 1. No menu superior direito, clique no ícone de **hambúrguer** (☰)
 2. Selecione **Controller Settings**
-3. Vá para a aba **CONTROLLER SERVICES**
+3. Vá para a aba **MANAGEMENT CONTROLLER SERVICES**
 
 ### 2.2 Adicionar e Configurar CSVReader
 
@@ -133,9 +133,9 @@ Configuração da conexão com o PostgreSQL.
    - Configure:
      - **Database Connection URL**: `jdbc:postgresql://postgres:5432/postgres`
      - **Database Driver Class Name**: `org.postgresql.Driver`
+     - **Database Driver Location(s)**: `/opt/nifi/nifi-current/lib/postgresql-jdbc.jar`
      - **Database User**: `postgres`
      - **Password**: `postgres`
-     - **Database Driver Location(s)**: `/opt/nifi/nifi-current/lib/postgresql-jdbc.jar`
 
 3. **Instalar o driver PostgreSQL no container:**
 
@@ -170,26 +170,22 @@ Este processor conectará ao servidor SFTP e baixará os arquivos CSV.
      - **Username**: `caixagis`
      - **Password**: `caixagis123`
      - **Remote Path**: `/download`
-     - **Search Recursively**: `false`
      - **File Filter Regex**: `.*\.csv` (apenas arquivos CSV)
      - **Path Filter Regex**: (deixe em branco)
      - **Polling Interval**: `60 sec`
+     - **Search Recursively**: `false`
+     - **Delete Original**: `false` (mude para `true` se quiser remover após download)
      - **Connection Timeout**: `30 sec`
      - **Data Timeout**: `30 sec`
-     - **Use Compression**: `false`
-     - **Delete Original**: `false` (mude para `true` se quiser remover após download)
      - **Strict Host Key Checking**: `false`
+     - **Use Compression**: `false`
 
 3. **Configurar Scheduling:**
    - Vá para a aba **SCHEDULING**
    - **Run Schedule**: `60 sec` (verifica novos arquivos a cada 60 segundos)
 
 4. **Configurar Relationships (Auto-terminate):**
-   - Vá para a aba **SETTINGS**
-   - Marque para **auto-terminate**:
-     - `not.found`
-     - `permission.denied`
-     - `failure`
+   - Vá para a aba **Relationships**
    - Deixe **success** desmarcado
 
 5. Clique em **APPLY**
@@ -210,7 +206,7 @@ O SplitText dividirá o CSV em blocos de linhas para processamento mais eficient
    - Vá para **PROPERTIES**
    - Configure:
      - **Line Split Count**: `100` (processa 100 linhas por vez, ajuste conforme necessário)
-     - **Maximum Fragment Size**: `0` (sem limite de tamanho)
+     - **Maximum Fragment Size**: `0` (sem limite de tamanho) ou deixe em branco
      - **Header Line Count**: `1` (mantém o cabeçalho em cada split)
      - **Header Line Marker Characters**: (deixe em branco)
      - **Remove Trailing Newlines**: `true`
@@ -276,7 +272,7 @@ O RenameRecordField renomeará os campos do CSV para corresponder aos nomes das 
    - Clique em **ADD**
 
 2. **Configurar o RenameRecordField:**
-   - **Record Reader**: Selecione o `CSVReader` criado anteriormente
+   - **Record Reader**: Selecione o `JsonTreeReader` criado anteriormente
    - **Record Writer**: Selecione o `JsonRecordSetWriter` criado anteriormente
 
 3. **Adicionar Mapeamentos de Campos** (clique no **+** para adicionar propriedades customizadas):
@@ -285,13 +281,13 @@ O RenameRecordField renomeará os campos do CSV para corresponder aos nomes das 
 
    | Nome da Propriedade | Valor da Propriedade |
    |---------------------|---------------------|
-   | `/ID`               | `/id`               |
-   | `/Projeto`          | `/projeto`          |
-   | `/Tipo`             | `/tipo`             |
-   | `/Situação`         | `/situacao`         |
-   | `/Título`           | `/titulo`           |
-   | `/Descrição`        | `/descricao`        |
-   | `/Últimas notas`    | `/ultimas_notas`    |
+   | `/"ID"`               | `/id`               |
+   | `/"Projeto"`          | `/projeto`          |
+   | `/"Tipo"`             | `/tipo`             |
+   | `/"Situação"`         | `/situacao`         |
+   | `/"Título"`           | `/titulo`           |
+   | `/"Descrição"`        | `/descricao`        |
+   | `/"Últimas notas"`    | `/ultimas_notas`    |
 
    > **Importante**: O RenameRecordField usa o formato `/campo_origem` como nome da propriedade e `/campo_destino` como valor.
 
@@ -323,7 +319,8 @@ Este processor inserirá os dados no PostgreSQL.
    - Clique em **ADD**
 
 2. **Configurar o PutDatabaseRecord:**
-   - **Record Reader**: Selecione o `JsonRecordSetWriter`
+   - **Record Reader**: Selecione o `JsonTreeReader`
+   - **Database Type**: `PostgreSQL`
    - **Statement Type**: `INSERT`
    - **Database Connection Pooling Service**: Selecione o `DBCPConnectionPool` criado
    - **Schema Name**: (deixe em branco)
